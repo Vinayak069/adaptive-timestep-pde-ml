@@ -125,7 +125,8 @@ def _run_adi_simulation(ic_name: str,
                                     solver_type='adi')
 
         features_list.append(feats)
-        targets_list.append(np.float32(np.log(dt_opt / config.DT_FIXED + 1e-12)))
+        # Same reference Δt that the models use in predict_dt()
+        targets_list.append(np.float32(np.log(dt_opt / config.DT_CFL)))
 
         u_prev = u.copy()
         u = solver.step(u, dt)
@@ -179,8 +180,8 @@ def _run_maccormack_simulation(ic_name: str,
                                     solver_type='maccormack')
 
         features_list.append(feats)
-        dt_ref = solver.max_stable_dt(cfl=config.CFL_TARGET)
-        targets_list.append(np.float32(np.log(dt_opt / (dt_ref + 1e-12))))
+        # Same reference Δt that the models use in predict_dt()
+        targets_list.append(np.float32(np.log(dt_opt / config.DT_CFL)))
 
         u_prev = u.copy()
         u = solver.step(u, dt, step_idx=step_idx)

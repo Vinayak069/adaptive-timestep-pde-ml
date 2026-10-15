@@ -177,8 +177,8 @@ class ADISolver:
         bx[1:-1] = 1.0 + 2*rx
         # Boundary: u=0 (Dirichlet) → trivial row
         bx[0] = 1.0; bx[-1] = 1.0
-        ax_arr = np.zeros(nx); ax_arr[1:] = ax
-        cx_arr = np.zeros(nx); cx_arr[:-1] = cx
+        ax_arr = np.zeros(nx); ax_arr[1:-1] = ax   # boundary rows stay identity (u=0)
+        cx_arr = np.zeros(nx); cx_arr[1:-1] = cx
 
         u_star = np.zeros_like(u)
         # Solve nx tridiagonal systems (one per row = y-index)
@@ -193,8 +193,8 @@ class ADISolver:
         by = np.ones(ny)
         by[1:-1] = 1.0 + 2*ry
         by[0] = 1.0; by[-1] = 1.0
-        ay_arr = np.zeros(ny); ay_arr[1:] = ay
-        cy_arr = np.zeros(ny); cy_arr[:-1] = cy
+        ay_arr = np.zeros(ny); ay_arr[1:-1] = ay   # boundary rows stay identity (u=0)
+        cy_arr = np.zeros(ny); cy_arr[1:-1] = cy
 
         u_new = np.zeros_like(u)
         # Solve ny tridiagonal systems (one per column = x-index)

@@ -43,6 +43,7 @@ class SimulationLog:
     l2_errors:    list = field(default_factory=list)
     solver_used:  list = field(default_factory=list)
     u_snapshots:  list = field(default_factory=list)
+    snapshot_times: list = field(default_factory=list)
     step_count:   int  = 0
     blowup:       bool = False
 
@@ -54,8 +55,9 @@ class SimulationLog:
         self.solver_used.append(solver)
         if l2 is not None:
             self.l2_errors.append(l2)
-        if u is not None and self.step_count % 20 == 0:
+        if u is not None:          # caller decides when to snapshot
             self.u_snapshots.append(u.copy())
+            self.snapshot_times.append(t)
         self.step_count += 1
 
     def to_arrays(self):
@@ -208,6 +210,8 @@ class HybridSolver:
         t      = 0.0
         log    = SimulationLog()
         step   = 0
+        log.u_snapshots.append(u0.copy())
+        log.snapshot_times.append(0.0)
 
         if dt_fixed is not None:
             mode_str = f"Fixed Δt = {dt_fixed:.2e}"

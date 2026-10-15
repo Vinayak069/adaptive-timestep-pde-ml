@@ -86,6 +86,11 @@ def plot_solution_evolution(snapshots: list,
     vmin = min(s.min() for s in snapshots)
     vmax = max(s.max() for s in snapshots)
     vcen = 0.0 if (vmin < 0 < vmax) else (vmin + vmax) / 2
+    if vcen == 0.0:
+        # Symmetric colour range, so tiny negative round-off/dispersion
+        # (~1e-6) is not stretched to the full dark-blue end of the map
+        vmax = max(abs(vmin), abs(vmax))
+        vmin = -vmax
 
     for k, idx in enumerate(snap_idx):
         ax = axes[k]
@@ -154,8 +159,9 @@ def plot_adaptive_dt(logs_dict: dict,
         n_steps = np.arange(1, len(cumtime)+1)
         ax2.plot(cumtime, n_steps, label=label, color=c, lw=1.5)
 
-    # Fixed reference line
-    ref_steps = int(config.T_END / dt_fixed)
+    # Fixed reference line (for the t_end that was actually simulated)
+    t_end = max(data['time'][-1] for data in logs_dict.values())
+    ref_steps = int(round(t_end / dt_fixed))
     ax2.axhline(ref_steps, color=COLORS['fixed'], ls=':', lw=1.2,
                 label=f'Fixed Δt ({ref_steps} steps)')
     ax2.set_xlabel("Simulation Time t")

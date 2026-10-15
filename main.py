@@ -16,6 +16,7 @@ Run: python main.py [--pde {adi|maccormack|both}] [--no-train]
 """
 
 import os
+import csv
 import sys
 import time
 import argparse
@@ -209,12 +210,13 @@ def run_simulations(pde_type: str,
     Run all solver modes and collect SimulationLogs.
 
     Modes tested:
-      1. Fixed Δt (baseline)
-      2. CFL-adaptive (no ML)
-      3. ML-Feedforward
-      4. ML-LSTM
-      5. ML-PINN
-      6. Hybrid (dynamic ADI ↔ MacCormack)
+      1. Fixed Δt = config.DT_FIXED (baseline)
+      2. Fixed Δt as large as allowed (CFL-limited / DT_MAX)
+      3. CFL-adaptive (no ML)
+      4. ML-Feedforward
+      5. ML-LSTM
+      6. ML-PINN
+      7. Hybrid (dynamic ADI ↔ MacCormack)
     """
     t_end = config.T_END if not quick else 0.1
 
@@ -235,72 +237,54 @@ def run_simulations(pde_type: str,
 
     all_logs = {}
 
-    # 1. Fixed Δt (Baseline)
-    print("\n[1/6] Fixed Δt solver...")
-    solver_fixed = HybridSolver(solver_type=pde_type, use_ml=False)
-    log_fixed = solver_fixed.run(u0, t_end=t_end,
-                                  dt_fixed=config.DT_FIXED,
-                                  u_exact_fn=exact_fn,
-                                  verbose=True)
-    all_logs['Fixed Δt'] = log_fixed.to_arrays()
-    all_logs['Fixed Δt']['snapshots'] = log_fixed.u_snapshots
-    all_logs['Fixed Δt']['blowup']    = log_fixed.blowup
+    def run_and_log(label, solver, dt_fixed=None):
+        """Run one solver mode, time it and store its log under `label`."""
+        t0 = time.perf_counter()
+        log = solver.run(u0, t_end=t_end, dt_fixed=dt_fixed,
+                         u_exact_fn=exact_fn, verbose=True)
+        all_logs[label] = log.to_arrays()
+        all_logs[label]['wall_time'] = time.perf_counter() - t0
+        all_logs[label]['snapshots'] = log.u_snapshots
+        all_logs[label]['snapshot_times'] = log.snapshot_times
+        all_logs[label]['blowup']    = log.blowup
 
-    # 2. CFL-Adaptive (no ML)
-    print("\n[2/6] CFL-Adaptive solver...")
-    solver_cfl = HybridSolver(solver_type=pde_type, use_ml=False)
-    log_cfl = solver_cfl.run(u0, t_end=t_end,
-                              u_exact_fn=exact_fn, verbose=True)
-    all_logs['CFL-Adaptive'] = log_cfl.to_arrays()
-    all_logs['CFL-Adaptive']['blowup'] = log_cfl.blowup
+    # 1. Fixed Δt (Baseline, config.DT_FIXED)
+    print("\n[1/7] Fixed Δt solver...")
+    run_and_log('Fixed Δt', HybridSolver(solver_type=pde_type, use_ml=False),
+                dt_fixed=config.DT_FIXED)
 
-    # 3. ML-Feedforward
-    print("\n[3/6] ML-Feedforward solver...")
-    solver_ff = HybridSolver(solver_type=pde_type,
-                              model=models['feedforward'],
-                              model_type='feedforward',
-                              feature_stats=stats,
-                              use_ml=True)
-    log_ff = solver_ff.run(u0, t_end=t_end,
-                            u_exact_fn=exact_fn, verbose=True)
-    all_logs['ML-Feedforward'] = log_ff.to_arrays()
-    all_logs['ML-Feedforward']['blowup'] = log_ff.blowup
+    # 2. Fixed Δt, as large as the adaptive controllers are allowed to go:
+    #    MacCormack → CFL-limited step, ADI (unconditionally stable) → DT_MAX
+    solver_large = HybridSolver(solver_type=pde_type, use_ml=False)
+    if pde_type == 'maccormack':
+        dt_large = solver_large.mac_solver.max_stable_dt(config.CFL_TARGET)
+    else:
+        dt_large = config.DT_MAX
+    print(f"\n[2/7] Fixed Δt = {dt_large:.2e} solver...")
+    run_and_log(f'Fixed Δt={dt_large:.1e}', solver_large, dt_fixed=dt_large)
 
-    # 4. ML-LSTM
-    print("\n[4/6] ML-LSTM solver...")
-    solver_lstm = HybridSolver(solver_type=pde_type,
-                                model=models['lstm'],
-                                model_type='lstm',
-                                feature_stats=stats,
-                                use_ml=True)
-    log_lstm = solver_lstm.run(u0, t_end=t_end,
-                                u_exact_fn=exact_fn, verbose=True)
-    all_logs['ML-LSTM'] = log_lstm.to_arrays()
-    all_logs['ML-LSTM']['blowup'] = log_lstm.blowup
+    # 3. CFL-Adaptive (no ML)
+    print("\n[3/7] CFL-Adaptive solver...")
+    run_and_log('CFL-Adaptive', HybridSolver(solver_type=pde_type, use_ml=False))
 
-    # 5. ML-PINN
-    print("\n[5/6] ML-PINN solver...")
-    solver_pinn = HybridSolver(solver_type=pde_type,
-                                model=models['pinn'],
-                                model_type='pinn',
-                                feature_stats=stats,
-                                use_ml=True)
-    log_pinn = solver_pinn.run(u0, t_end=t_end,
-                                u_exact_fn=exact_fn, verbose=True)
-    all_logs['ML-PINN'] = log_pinn.to_arrays()
-    all_logs['ML-PINN']['blowup'] = log_pinn.blowup
+    # 4-6. ML-predicted Δt
+    for i, (key, label) in enumerate([('feedforward', 'ML-Feedforward'),
+                                      ('lstm',        'ML-LSTM'),
+                                      ('pinn',        'ML-PINN')], start=4):
+        print(f"\n[{i}/7] {label} solver...")
+        run_and_log(label, HybridSolver(solver_type=pde_type,
+                                        model=models[key],
+                                        model_type=key,
+                                        feature_stats=stats,
+                                        use_ml=True))
 
-    # 6. Hybrid Solver (dynamic switching)
-    print("\n[6/6] Dynamic Hybrid solver...")
-    solver_hybrid = HybridSolver(solver_type='hybrid',
-                                  model=models['feedforward'],
-                                  model_type='feedforward',
-                                  feature_stats=stats,
-                                  use_ml=True)
-    log_hybrid = solver_hybrid.run(u0, t_end=t_end,
-                                    u_exact_fn=exact_fn, verbose=True)
-    all_logs['Hybrid (Switch)'] = log_hybrid.to_arrays()
-    all_logs['Hybrid (Switch)']['blowup'] = log_hybrid.blowup
+    # 7. Hybrid Solver (Péclet-number switch, Feedforward Δt)
+    print("\n[7/7] Dynamic Hybrid solver...")
+    run_and_log('Hybrid (Switch)', HybridSolver(solver_type='hybrid',
+                                                model=models['feedforward'],
+                                                model_type='feedforward',
+                                                feature_stats=stats,
+                                                use_ml=True))
 
     return all_logs, u0
 
@@ -320,10 +304,10 @@ def generate_visualizations(all_logs: dict, histories: dict,
     print(f"{'='*55}")
 
     # Solution snapshots
-    ref_log = all_logs.get('ML-Feedforward') or all_logs.get('Fixed Δt')
-    if 'snapshots' in ref_log and ref_log['snapshots']:
+    ref_log = all_logs['ML-Feedforward']
+    if ref_log['snapshots']:
         plot_solution_evolution(
-            ref_log['snapshots'], ref_log['time'],
+            ref_log['snapshots'], ref_log['snapshot_times'],
             title=f"{pde_type.upper()} Solution Evolution (ML-Adaptive)",
             results_dir=res_dir)
 
@@ -342,8 +326,13 @@ def generate_visualizations(all_logs: dict, histories: dict,
 
 
 def compute_summary_metrics(all_logs: dict) -> dict:
-    """Compute per-method performance metrics."""
-    ref_steps = int(config.T_END / config.DT_FIXED)
+    """
+    Compute per-method performance metrics.
+
+    Speedup is the step-count ratio against the 'Fixed Δt' run that was
+    actually performed (same t_end), not against config.T_END / DT_FIXED.
+    """
+    ref_steps = len(all_logs['Fixed Δt']['dt'])
     metrics = {}
 
     for method, data in all_logs.items():
@@ -357,6 +346,7 @@ def compute_summary_metrics(all_logs: dict) -> dict:
             'n_steps':  n_steps,
             'speedup':  speedup,
             'mean_dt':  float(np.mean(data['dt'])),
+            'wall_time': data.get('wall_time', float('nan')),
             'blowup':   data.get('blowup', False),
         }
 
@@ -365,19 +355,30 @@ def compute_summary_metrics(all_logs: dict) -> dict:
 
 def print_summary_table(metrics: dict, pde_type: str):
     """Print formatted summary table."""
-    print(f"\n{'='*75}")
+    print(f"\n{'='*86}")
     print(f"  RESULTS SUMMARY — {pde_type.upper()}")
-    print(f"{'='*75}")
-    print(f"  {'Method':<22} {'Steps':>8} {'Speedup':>9} {'Mean L2':>12} {'Mean Δt':>12} {'Blowup':>8}")
-    print(f"  {'-'*22} {'-'*8} {'-'*9} {'-'*12} {'-'*12} {'-'*8}")
+    print(f"{'='*86}")
+    print(f"  {'Method':<22} {'Steps':>8} {'Speedup':>9} {'Mean L2':>12} {'Mean Δt':>12} {'Wall [s]':>9} {'Blowup':>8}")
+    print(f"  {'-'*22} {'-'*8} {'-'*9} {'-'*12} {'-'*12} {'-'*9} {'-'*8}")
 
     for method, m in metrics.items():
         blowup_str = '⚠️  YES' if m['blowup'] else '  No'
         l2_str = f"{m['mean_l2']:.4e}" if not np.isnan(m['mean_l2']) else '    N/A'
         print(f"  {method:<22} {m['n_steps']:>8d} {m['speedup']:>8.2f}x "
-              f"{l2_str:>12}  {m['mean_dt']:>10.2e}  {blowup_str}")
+              f"{l2_str:>12}  {m['mean_dt']:>10.2e} {m['wall_time']:>9.3f}  {blowup_str}")
 
-    print(f"{'='*75}")
+    print(f"{'='*86}")
+
+
+def save_summary_csv(metrics: dict, path: str):
+    """Write the summary table to CSV so results can be diffed / committed."""
+    fields = ['n_steps', 'speedup', 'mean_l2', 'mean_dt', 'wall_time', 'blowup']
+    with open(path, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(['method'] + fields)
+        for method, m in metrics.items():
+            writer.writerow([method] + [m[k] for k in fields])
+    print(f"  [✓] Saved: {path}")
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -442,6 +443,7 @@ def main():
 
         res_dir = os.path.join(config.RESULTS_DIR, pde_type)
         plot_summary_metrics(metrics, results_dir=res_dir)
+        save_summary_csv(metrics, os.path.join(res_dir, 'summary.csv'))
 
         all_results[pde_type] = metrics
 
