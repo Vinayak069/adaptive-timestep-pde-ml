@@ -21,7 +21,7 @@ data/
 models/
 
 # Results (plots — regenerate with main.py)
-results/
+/results/
 
 # OS
 .DS_Store
@@ -35,3 +35,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Test cache
+.pytest_cache/
